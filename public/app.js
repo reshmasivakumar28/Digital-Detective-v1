@@ -773,7 +773,7 @@
           <p class="page-subtitle">Register all participating teams first, then start one shared competition timer for every registered team. The answer unseals only after every participating team finishes or its deadline expires.</p></div>
       </section>
       ${pendingExtensionCount ? `<div class="extension-alert" role="status"><strong>JUDGE NOTICE · ${pendingExtensionCount} PENDING TIME EXTENSION${pendingExtensionCount === 1 ? "" : "S"}</strong><span>Review the highlighted team dossier and approve or reject the request.</span></div>` : ""}
-      <section class="panel judge-launch"><div class="panel-heading"><h2>COMPETITION CONTROL</h2><span class="mono-label">${state.competition.startedAt ? "IN PROGRESS" : "NOT STARTED"}</span></div>      <div class="panel-body"><p>${state.competition.startedAt ? `SHARED GAME STARTED ${new Date(state.competition.startedAt).toLocaleString()} · all registered participating teams share the original deadline unless the judge approves an individual +15-minute extension.` : `${state.competition.registeredTeamCount || 0} eligible team(s) registered · start once to begin their shared 60-minute timer.`}</p>${!state.competition.startedAt ? `<button class="button button-primary" type="button" data-action="start-for-all" data-sound="transition" ${state.competition.registeredTeamCount ? "" : "disabled"}>START ALL REGISTERED TEAMS · 60 MINUTES</button><button class="button button-small button-quiet" style="margin-left:8px" type="button" data-action="start-competition" data-sound="transition" ${teams.some((t) => t.approved && !t.eliminated) ? "" : "disabled"}>START APPROVED TEAMS ONLY</button>` : `<p>${state.competition.finishedTeams || 0} / ${state.competition.participatingTeams || 0} participating teams finished, were eliminated, or timed out · reveal ${state.revealReady ? "UNSEALED" : "SEALED"}</p>`}<button class="button button-small button-danger" style="margin-top:12px" type="button" data-action="clear-team-history" data-sound="finalize" ${teams.length ? "" : "disabled"}>CLEAR ALL TEAM REGISTRATION HISTORY</button><p class="private-note">Register teams before starting. This one-time action gives every registered eligible team the same server-controlled deadline; it cannot be reset. An individual extension only affects that team. The case unseals when every participant completes, is eliminated, or times out. Clearing team history preserves the judge account and game start.</p></div></section>
+      <section class="panel judge-launch"><div class="panel-heading"><h2>COMPETITION CONTROL</h2><span class="mono-label">${state.competition.startedAt ? "IN PROGRESS" : "NOT STARTED"}</span></div><div class="panel-body"><p>${state.competition.startedAt ? `SHARED GAME STARTED ${new Date(state.competition.startedAt).toLocaleString()} · approved late teams join the existing deadline.` : `${state.competition.registeredTeamCount || 0} eligible team(s) registered · this starts the shared 60-minute timer for every registered team.`}</p>${!state.competition.startedAt ? `<button class="button button-primary" type="button" data-action="start-for-all" data-sound="transition" ${state.competition.registeredTeamCount ? "" : "disabled"}>APPROVE ALL AND START TIMER</button>` : `<p>${state.competition.finishedTeams || 0} / ${state.competition.participatingTeams || 0} participating teams finished, were eliminated, or timed out · reveal ${state.revealReady ? "UNSEALED" : "SEALED"}</p>${state.competition.participatingTeams === 0 ? `<p class="form-error">No teams are currently in this competition. Approve a registered team in TEAM DOSSIERS to admit it.</p>` : ""}` }<button class="button button-small button-danger" style="margin-top:12px" type="button" data-action="clear-team-history" data-sound="finalize" ${teams.length && !state.competition.startedAt ? "" : "disabled"}>CLEAR ALL TEAM REGISTRATION HISTORY</button><p class="private-note">This one-time action approves every eligible registered team, including teams that are offline, and starts their shared server-controlled 60-minute timer. Individual approval does not start the timer. During an active game, newly approved teams join that existing deadline. Clearing history is only available before the game starts; archive a finished batch to open registration again.</p></div></section>
       ${state.competition.startedAt && state.revealReady ? `<section class="panel judge-launch"><div class="panel-heading"><h2>READY FOR ANOTHER BATCH?</h2><span class="mono-label">CURRENT CASE CLOSED</span></div><div class="panel-body"><p>The completed batch will be saved in the judge archive. Starting a new batch clears the current roster and results, resets team numbers, and opens registration for a fresh competition. The judge account is preserved.</p><button class="button button-danger" type="button" data-action="start-new-batch" data-sound="finalize">ARCHIVE RESULTS & START NEW BATCH</button></div></section>` : ""}
       ${batchHistory}
       <p class="private-note">Focus-away records are advisory browser signals only; tab switches and other system behavior may create false positives.</p>
@@ -964,8 +964,8 @@
         await api("/api/judge/approve-team", { method: "POST", body: { teamId: button.dataset.teamId, approved: true } });
         await refreshState();
         toast(state.competition.startedAt
-          ? `TEAM ${button.dataset.teamName} admitted to the shared timer. The original deadline applies.`
-          : `TEAM ${button.dataset.teamName} approved for the initial competition.`, "success");
+          ? `TEAM ${button.dataset.teamName} approved and admitted to the existing shared deadline.`
+          : `TEAM ${button.dataset.teamName} approved. Approve other teams, then start the shared timer when ready.`, "success");
         return;
       }
       if (action === "start-competition") {
@@ -976,10 +976,18 @@
         return;
       }
       if (action === "start-for-all") {
-        if (!window.confirm("Start the one shared 60-minute timer for every registered, non-eliminated team, including teams not currently logged in? This cannot be reset. All teams will share the same deadline.")) return;
+        if (!window.confirm("Approve every registered, non-eliminated team and start their shared 60-minute timer now, including teams that are not logged in? This cannot be reset.")) return;
         const result = await api("/api/judge/start-for-all", { method: "POST", body: {} });
+        if (!result || !Number.isInteger(result.participatingTeams) || result.participatingTeams < 1 ||
+            !Number.isFinite(result.startedAt) || !Number.isFinite(result.deadline) ||
+            result.deadline <= result.startedAt) {
+          throw new Error("The server did not confirm that the shared timer started. Refresh the judge page and check competition status.");
+        }
         await refreshState();
-        toast(`The shared competition has started for ${result.participatingTeams} registered team(s).`, "success");
+        if (!state.competition.startedAt) {
+          throw new Error("The timer request succeeded, but the judge page could not confirm the competition start. Refresh and check the team timers.");
+        }
+        toast(`${result.participatingTeams} registered team(s) approved. The shared 60-minute timer has started.`, "success");
         return;
       }
       if (action === "request-extension") {
@@ -1021,7 +1029,7 @@
         return;
       }
       if (action === "clear-team-history") {
-        if (!window.confirm("Clear ALL team accounts, team numbers, submissions, hints, and results? This cannot be undone. The judge account and game start will be kept; new teams will receive new numbers starting at TEAM 001.")) return;
+        if (!window.confirm("Clear ALL team accounts, team numbers, submissions, hints, and results? This cannot be undone. This action is only available before the competition starts.")) return;
         await api("/api/judge/clear-teams", { method: "POST", body: {} });
         await refreshState();
         toast("Team registration history cleared. The judge account and game start were preserved.", "success");

@@ -306,6 +306,9 @@ auth = function (req, res, role) {
 };
 
 revealReady = function () {
+  if (store.competition.startedAt && store.competition.deadline && Date.now() >= store.competition.deadline) {
+    return true;
+  }
   const participants = (store.competition.participantIds || []).map(teamFor).filter(Boolean);
   return participants.length > 0 && participants.every((team) =>
     team.eliminated ||
@@ -379,7 +382,7 @@ stateFor = function (currentSession) {
   const hasStarted = Boolean(team.startedAt && isParticipant && team.approved && !team.eliminated);
   const deadlinePassed = hasStarted && Date.now() >= team.deadline;
   const canSeeRound = hasStarted && !isComplete && !deadlinePassed;
-  const open = revealReady();
+  const open = hasStarted && revealReady();
   return {
     role: "team",
     serverTime: Date.now(),
@@ -715,15 +718,16 @@ api = async function (req, res, url) {
     if (!team) return fail(res, 404, "Select a registered team.");
     if (team.eliminated) return fail(res, 409, "An eliminated team cannot be admitted.");
     if (team.approved) return fail(res, 409, "This team has already been approved.");
+    if (data.approved !== true) return fail(res, 400, "Team approval must be explicit.");
 
     team.approved = true;
     if (store.competition.startedAt) {
-      if (revealReady()) {
+      if (Date.now() >= store.competition.deadline || revealReady()) {
         team.approved = false;
-        return fail(res, 409, "The case reveal is already open; no additional teams can join this game.");
+        return fail(res, 409, "The shared competition window or case reveal has closed; this team cannot join.");
       }
-      team.startedAt = Date.now();
-      team.deadline = team.startedAt + COMPETITION_MS;
+      team.startedAt = store.competition.startedAt;
+      team.deadline = store.competition.deadline;
       store.competition.participantIds = [...new Set([...(store.competition.participantIds || []), team.id])];
     }
     await persist();
@@ -734,6 +738,9 @@ api = async function (req, res, url) {
 
   if (method === "POST" && pathname === "/api/judge/clear-teams") {
     if (!auth(req, res, "judge")) return;
+    if (store.competition.startedAt) {
+      return fail(res, 409, "Team history cannot be cleared after the competition starts. Archive the finished batch to open registration again.");
+    }
     store.teams = [];
     store.nextTeamNumber = 1;
     store.winner = null;

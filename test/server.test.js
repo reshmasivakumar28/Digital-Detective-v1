@@ -274,6 +274,19 @@ test("shared start, late login, extension review, and accepted-round history wor
   assert.equal(preStartJudgeState.competition.loggedInTeamCount, 1);
   assert.equal(preStartJudgeState.competition.registeredTeamCount, 2);
 
+  for (const teamName of ["Shared One", "Shared Two"]) {
+    const team = preStartJudgeState.teams.find((entry) => entry.teamName === teamName);
+    const approved = await call("/api/judge/approve-team", {
+      method: "POST",
+      sessionToken: setup.sessionToken,
+      body: { teamId: team.id, approved: true }
+    });
+    assert.equal(approved.status, 200, `${teamName} should be approved independently.`);
+    preStartJudgeState = (await call("/api/state", { sessionToken: setup.sessionToken })).result;
+    assert.equal(preStartJudgeState.competition.startedAt, null,
+      "Approving one team must not start the timer or prevent approving another.");
+  }
+
   const started = await call("/api/judge/start-for-all", {
     method: "POST",
     sessionToken: setup.sessionToken,
@@ -367,6 +380,58 @@ test("shared start, late login, extension review, and accepted-round history wor
   judgeState = (await call("/api/state", { sessionToken: setup.sessionToken })).result;
   assert.equal(judgeState.revealReady, true,
     "The solution becomes available when every participating team is complete, eliminated, or out of time.");
+});
+
+test("judge can approve all registered teams and start their shared timer in one action", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "case-zero-start-all-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const { call } = await startServer(t, path.join(directory, "data.json"));
+
+  const setup = await call("/api/judge/setup", {
+    method: "POST",
+    body: { setupSecret, username: "allteamsjudge", password: "a-long-private-password" }
+  });
+  async function register(teamName, username) {
+    return call("/api/auth/team/register", {
+      method: "POST",
+      body: {
+        teamName,
+        username,
+        password: "a-strong-team-password",
+        members: [`${teamName} One`, `${teamName} Two`, `${teamName} Three`]
+      }
+    });
+  }
+
+  const teams = [
+    await register("First Unit", "first_unit_lead"),
+    await register("Second Unit", "second_unit_lead")
+  ];
+  assert.ok(teams.every((team) => team.status === 201));
+
+  const started = await call("/api/judge/start-for-all", {
+    method: "POST",
+    sessionToken: setup.sessionToken,
+    body: {}
+  });
+  assert.equal(started.status, 200);
+  assert.equal(started.result.participatingTeams, 2);
+  assert.equal(started.result.deadline - started.result.startedAt, 60 * 60 * 1000);
+
+  const judgeState = (await call("/api/state", { sessionToken: setup.sessionToken })).result;
+  assert.equal(judgeState.competition.participatingTeams, 2);
+  for (const team of judgeState.teams) {
+    assert.equal(team.approved, true, `${team.teamName} should be approved.`);
+    assert.equal(team.startedAt, started.result.startedAt);
+    assert.equal(team.deadline, started.result.deadline);
+  }
+
+  for (const team of teams) {
+    const teamState = (await call("/api/state", { sessionToken: team.sessionToken })).result;
+    assert.equal(teamState.round.title, "THE SILENT STATION",
+      "Each approved team should immediately be able to play.");
+    assert.equal(teamState.team.deadline, started.result.deadline);
+  }
 });
 
 test("judge can archive a completed batch and start fresh registrations", async (t) => {
@@ -669,7 +734,7 @@ test("team evidence artifacts are viewable, downloadable, and round-gated", asyn
     "The final evidence index does not print the culprit or corrected time.");
 });
 
-test("judge can admit late teams, eliminate teams, clear team history, and retain the game", async (t) => {
+test("judge can admit late teams, eliminate teams, and retain registration history during a game", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "case-zero-admin-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const dataFile = path.join(directory, "data.json");
@@ -746,6 +811,18 @@ test("judge can admit late teams, eliminate teams, clear team history, and retai
   assert.equal(admitted.status, 200);
   assert.equal(admitted.result.deadline, sharedDeadline, "A late team shares the original competition deadline.");
   assert.equal(admitted.result.startedAt, started.result.competition.startedAt);
+  const secondLateTeam = await register("More Late Arrivals", "more_late_lead");
+  assert.equal(secondLateTeam.status, 201);
+  judgeState = (await call("/api/state", { cookie: judgeCookie })).result;
+  const secondLateApproval = await call("/api/judge/approve-team", {
+    method: "POST",
+    cookie: judgeCookie,
+    body: { teamId: judgeState.teams[3].id, approved: true }
+  });
+  assert.equal(secondLateApproval.status, 200,
+    "Approving one late team must not prevent approving additional teams.");
+  assert.equal(secondLateApproval.result.deadline, sharedDeadline,
+    "Every late-approved team joins the original shared deadline.");
   assert.equal((await call("/api/state", { cookie: judgeCookie })).result.competition.deadline, sharedDeadline);
   lateState = (await call("/api/state", { cookie: lateTeam.cookie })).result;
   assert.equal(lateState.competition.deadline, admitted.result.deadline);
@@ -852,22 +929,132 @@ test("judge can admit late teams, eliminate teams, clear team history, and retai
     cookie: judgeCookie,
     body: {}
   });
-  assert.equal(cleared.status, 200);
+  assert.equal(cleared.status, 409,
+    "Clearing history after the timer starts must not erase the participant list.");
   judgeState = (await call("/api/state", { cookie: judgeCookie })).result;
-  assert.equal(judgeState.teams.length, 0);
+  assert.equal(judgeState.teams.length, 4);
   assert.equal(judgeState.competition.startedAt, started.result.competition.startedAt);
-  assert.equal(judgeState.winner, null);
+  assert.equal(judgeState.winner.teamId, judgeState.teams[2].id);
 
   const replacement = await register("Fresh Start", "fresh_lead");
   assert.equal(replacement.status, 201);
-  assert.equal(replacement.result.teamNumber, 1, "Clearing team history resets team numbering.");
+  assert.equal(replacement.result.teamNumber, 5, "Team numbering is not reset during an active batch.");
   judgeState = (await call("/api/state", { cookie: judgeCookie })).result;
   const replacementApproval = await call("/api/judge/approve-team", {
     method: "POST",
     cookie: judgeCookie,
     body: { teamId: judgeState.teams[0].id, approved: true }
   });
-  assert.equal(replacementApproval.status, 409, "A cleared, newly registered team cannot join after the shared deadline.");
+  assert.equal(replacementApproval.status, 409, "A new team cannot join after the shared deadline.");
+});
+
+test("judge can recover an expired batch whose participant list was cleared", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "case-zero-empty-batch-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const dataFile = path.join(directory, "data.json");
+  const { call } = await startServer(t, dataFile);
+
+  const setup = await call("/api/judge/setup", {
+    method: "POST",
+    body: { setupSecret, username: "recoveryjudge", password: "a-long-private-password" }
+  });
+  const team = await call("/api/auth/team/register", {
+    method: "POST",
+    body: {
+      teamName: "Recovery Unit",
+      username: "recovery_lead",
+      password: "a-strong-team-password",
+      members: ["Analyst One", "Analyst Two", "Analyst Three"]
+    }
+  });
+  assert.equal(team.status, 201);
+  const started = await call("/api/judge/start-for-all", {
+    method: "POST",
+    sessionToken: setup.sessionToken,
+    body: {}
+  });
+  assert.equal(started.status, 200);
+
+  const persisted = JSON.parse(await fs.readFile(dataFile, "utf8"));
+  persisted.teams = [];
+  persisted.competition.participantIds = [];
+  persisted.competition.deadline = Date.now() - 1;
+  await fs.writeFile(dataFile, JSON.stringify(persisted));
+
+  const emptyState = (await call("/api/state", { sessionToken: setup.sessionToken })).result;
+  assert.equal(emptyState.competition.participatingTeams, 0);
+  assert.equal(emptyState.revealReady, true,
+    "An expired empty batch must not remain locked forever.");
+
+  const archived = await call("/api/judge/start-new-batch", {
+    method: "POST",
+    sessionToken: setup.sessionToken,
+    body: {}
+  });
+  assert.equal(archived.status, 200);
+  const freshState = (await call("/api/state", { sessionToken: setup.sessionToken })).result;
+  assert.equal(freshState.competition.startedAt, null);
+  assert.equal(freshState.archivedBatches.length, 1);
+  assert.equal(freshState.archivedBatches[0].teams.length, 0);
+});
+
+test("newly registered teams wait for judge approval instead of seeing a completed game's reveal", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "case-zero-pending-reveal-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const dataFile = path.join(directory, "data.json");
+  const { call } = await startServer(t, dataFile);
+
+  const setup = await call("/api/judge/setup", {
+    method: "POST",
+    body: { setupSecret, username: "pendingjudge", password: "a-long-private-password" }
+  });
+  const firstTeam = await call("/api/auth/team/register", {
+    method: "POST",
+    body: {
+      teamName: "First Unit",
+      username: "first_pending_lead",
+      password: "a-strong-team-password",
+      members: ["Analyst One", "Analyst Two", "Analyst Three"]
+    }
+  });
+  const started = await call("/api/judge/start-for-all", {
+    method: "POST",
+    sessionToken: setup.sessionToken,
+    body: {}
+  });
+  assert.equal(started.status, 200);
+
+  const persisted = JSON.parse(await fs.readFile(dataFile, "utf8"));
+  persisted.competition.deadline = Date.now() - 1;
+  for (const team of persisted.teams) team.deadline = Date.now() - 1;
+  await fs.writeFile(dataFile, JSON.stringify(persisted));
+
+  const judgeState = (await call("/api/state", { sessionToken: setup.sessionToken })).result;
+  assert.equal(judgeState.revealReady, true, "The completed batch reveal is available to the judge.");
+
+  const pendingTeam = await call("/api/auth/team/register", {
+    method: "POST",
+    body: {
+      teamName: "Waiting Unit",
+      username: "waiting_pending_lead",
+      password: "a-strong-team-password",
+      members: ["Investigator One", "Investigator Two", "Investigator Three"]
+    }
+  });
+  assert.equal(pendingTeam.status, 201);
+
+  const pendingState = (await call("/api/state", { sessionToken: pendingTeam.sessionToken })).result;
+  assert.equal(pendingState.team.approved, false);
+  assert.equal(pendingState.team.progress, 0);
+  assert.equal(pendingState.revealReady, false);
+  assert.equal(pendingState.reveal, null);
+  assert.equal(pendingState.round, null);
+  assert.equal((await call("/api/team/submit", {
+    method: "POST",
+    sessionToken: pendingTeam.sessionToken,
+    body: { round: 3, answer: "VICTOR HALE" }
+  })).status, 409, "A pending team cannot submit a final-round answer.");
+  assert.equal(firstTeam.status, 201);
 });
 
 test("team-specific deadlines and reveal authorization survive a server restart", async (t) => {
