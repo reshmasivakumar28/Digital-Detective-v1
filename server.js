@@ -697,6 +697,7 @@ api = async function (req, res, url) {
       eliminated: false,
       finalVerdict: null
     };
+
     while (store.teams.some((existing) => existing.accessCode === team.accessCode)) {
       team.accessCode = crypto.randomBytes(5).toString("hex").toUpperCase();
     }
@@ -907,11 +908,12 @@ api = async function (req, res, url) {
   return originalApi(req, res, url);
 };
 
-module.exports = {
-  handle,
-  initializeDatabase,
-  load,
-  persist,
-  syncSubCollections,
-  getStore: () => store
-};
+// Export the main request handler function for Vercel
+module.exports = handle;
+
+// Attach your other functions to module.exports so they remain accessible if needed
+module.exports.initializeDatabase = initializeDatabase;
+module.exports.load = load;
+module.exports.persist = persist;
+module.exports.syncSubCollections = syncSubCollections;
+module.exports.getStore = () => store;
