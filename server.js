@@ -4,7 +4,7 @@ const DATA_FILE=process.env.CASE_ZERO_DATA_FILE?path.resolve(process.env.CASE_ZE
 const { MongoClient } = require("mongodb");
 const MONGODB_URI = process.env.MONGODB_URI || "";
 const MONGODB_DB = process.env.MONGODB_DB || "";
-const database = MONGODB_URI ? new MongoClient(MONGODB_URI) : null;
+let database = MONGODB_URI ? new MongoClient(MONGODB_URI) : null;
 let stateCollection;
 const HOST=process.env.HOST||'127.0.0.1',PORT=Number(process.env.PORT||3000),COMPETITION_MS=3600000,SESSION_MS=43200000,SETUP_SECRET=process.env.CASE_ZERO_SETUP_SECRET||'',MAX_TEAMS=100;
 const sessions=new Map(),attempts=new Map(),answerAttempts=new Map();let store,queue=Promise.resolve(),saveQueue=Promise.resolve();
