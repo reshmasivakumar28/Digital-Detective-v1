@@ -1,11 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/index.js": {
-      "includeFiles": "public/evidence/**",
-      "maxDuration": 15
-    }
-  },
   "redirects": [
     {
       "source": "/evidence/:path*",
@@ -16,7 +10,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "/api/index.js"
+      "destination": "https://digital-detective-v1.onrender.com/api/:path*"
     }
   ]
 }

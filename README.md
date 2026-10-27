@@ -36,26 +36,14 @@ The evidence panel in a current case file provides the round's fictional reports
 
 The round-one QR opens `/scan-er-02.html`, which displays the incident image. Before generating a QR for other devices, set `CASE_ZERO_PUBLIC_URL` to the hosted HTTPS origin or phone-reachable LAN address, then run `npm run generate:evidence-qr`. The localhost default only works on the server computer.
 
-## Deploying to Vercel
+## Deploying the frontend to Vercel
 
-The project is fully configured for Vercel deployment with serverless API functions and protected static assets:
+The app's frontend can be hosted on Vercel while its API and database-backed state remain on Render. `vercel.json` forwards every `/api/*` request to `https://digital-detective-v1.onrender.com/api/*`; deploy the latest repository revision so this rewrite is active.
 
-1. **Push your code to GitHub / GitLab / Bitbucket** (or use the Vercel CLI with `vercel`).
-2. **Import the repository into Vercel**:
-   - Framework Preset: **Other** (or Leave Default)
-   - Root Directory: `./`
-3. **Configure Environment Variables** in the Vercel dashboard:
-   - `MONGODB_URI`: Your MongoDB Atlas connection string (from `.env`).
-   - `MONGODB_DB`: `case_zero`
-   - `CASE_ZERO_SETUP_SECRET`: (Optional) Administrator secret if you need to run initial judge setup on the deployed app.
-   - `CASE_ZERO_PUBLIC_URL`: (Optional) Your production URL (e.g. `https://your-project.vercel.app`) if generating device-friendly QR codes.
-4. **MongoDB Atlas Network Access**:
-   - In MongoDB Atlas, go to **Network Access** → **IP Access List**.
-   - Make sure `0.0.0.0/0` (Allow access from anywhere) is enabled so Vercel's serverless lambdas can connect to your database.
-5. **Deploy**:
-   - Static files (`index.html`, `styles.css`, `app.js`, etc.) are served from `public/`.
-   - Direct requests to `/evidence/*` are shielded and redirected to `/404`.
-   - API endpoints (`/api/*`) are handled serverlessly via `api/index.js` with database-persisted sessions.
+1. Import the repository into Vercel with Framework Preset **Other** and Root Directory `./`.
+2. Keep the Render service running and configure its `MONGODB_URI` and, if needed, `MONGODB_DB` and `CASE_ZERO_SETUP_SECRET` environment variables in Render. These backend variables are not needed in Vercel for this setup.
+3. Deploy or redeploy the latest commit containing `vercel.json`. Static files are served from `public/`, and direct requests to `/evidence/*` are redirected to `/404`.
+4. Verify the deployment by opening `https://<your-vercel-domain>/api/bootstrap`. It should return JSON from the Render API. If it returns `Not found`, make sure Vercel deployed the revision with the `/api/*` rewrite and then redeploy.
 
 ## Maintenance
 
