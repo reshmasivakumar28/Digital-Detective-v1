@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "public/evidence/**",
+      "maxDuration": 15
+    }
+  },
+  "redirects": [
+    {
+      "source": "/evidence/:path*",
+      "destination": "/404",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index.js"
+    }
+  ]
+}
+
